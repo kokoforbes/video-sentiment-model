@@ -5,6 +5,8 @@ import os
 import cv2
 import numpy as np
 import torch
+import subprocess
+import torchaudio
 
 
 class MELDDataset(Dataset):
@@ -43,6 +45,7 @@ class MELDDataset(Dataset):
                 ret, frame = cap.read()
                 if not ret:
                     break
+
                 # Resize the frame to a fixed size
                 frame = cv2.resize(frame, (224, 224))
                 frame = frame / 255.0
@@ -54,7 +57,7 @@ class MELDDataset(Dataset):
             cap.release()
 
         if (len(frames) == 0):
-            raise ValueError(f"No frames extracted from video: {video_path}")
+            raise ValueError(f"No frames extracted from video")
 
         # Pad or truncate the frames to ensure a fixed length
         if len(frames) < 30:
@@ -65,6 +68,56 @@ class MELDDataset(Dataset):
         # Before permute: [frames, height, width, channels]
         # After permute: [frames, channels, height, width]
         return torch.FloatTensor(np.array(frames)).permute(0, 3, 1, 2)
+
+    def _extract_audio_features(self, video_path):
+        # Extract audio features from the video file
+        audio_path = video_path.replace('.mp4', '.wav')
+
+        try:
+            subprocess.run([
+                'ffmpeg',
+                '-i', video_path,
+                '-vn',
+                '-acodec', 'pcm_s16le',
+                '-ar', '16000',
+                '-ac', '1',
+                audio_path
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            waveform, sample_rate = torchaudio.load(audio_path)
+
+            if sample_rate != 16000:
+                resampler = torchaudio.transforms.Resample(
+                    orig_freq=sample_rate, new_freq=16000)
+                waveform = resampler(waveform)
+
+            mel_spectrogram = torchaudio.transforms.MelSpectrogram(
+                sample_rate=16000,
+                n_mels=64,
+                n_fft=1024,
+                hop_length=512,
+            )
+
+            mel_spec = mel_spectrogram(waveform)
+
+            # Normalize the mel spectrogram
+            mel_spec = (mel_spec - mel_spec.mean()) / mel_spec.std()
+
+            if mel_spec.size(2) < 300:
+                padding = 300 - mel_spec.size(2)
+                mel_spec = torch.nn.functional.pad(mel_spec, (0, padding))
+            else:
+                mel_spec = mel_spec[:, :, :300]
+
+            return mel_spec
+
+        except subprocess.CalledProcessError as e:
+            raise ValueError(f"Error extracting audio: {str(e)}")
+        except Exception as e:
+            raise ValueError(f"Audio error: {str(e)}")
+        finally:
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
 
     def __len__(self):
         return len(self.data)
@@ -86,11 +139,12 @@ class MELDDataset(Dataset):
                                      max_length=128,
                                      return_tensors="pt")
 
-        video_frames = self._load_video_frames(path)
-
-        print(video_frames)
+        # video_frames = self._load_video_frames(path)
+        audio_features = self._extract_audio_features(path)
+        print(audio_features)
 
 
 if __name__ == "__main__":
     meld = MELDDataset('../dataset/dev/dev_sent_emo.csv',
                        '../dataset/dev/dev_splits_complete')
+print(meld[0])
