@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import torch
 import subprocess
-import torchaudio
+import torchaudio  # type: ignore
 # Disable parallelism for tokenizers to avoid warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
