@@ -73,5 +73,64 @@ class AudioEncoder(nn.Module):
     def forward(self, x):
         x = x.squeeze(1)  # Remove the channel dimension
         features = self.conv_layers(x)
+        # features shape: [batch_size, 128, 1]
         # Remove the time dimension
         return self.projection(features.squeeze(-1))
+
+
+class MultimodalSentimentModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        # Initialize the encoders
+        # Text, Video, and Audio encoders
+        self.text_encoder = TextEncoder()
+        self.video_encoder = VideoEncoder()
+        self.audio_encoder = AudioEncoder()
+
+        # fusion layer
+        # Concatenate features from all modalities
+
+        self.fusion_layer = nn.Sequential(
+            nn.Linear(128 * 3, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+        )
+
+        # Final classification layer
+        self.emotion_classifier = nn.Sequential(
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            # 7 emotion classes - Anger, Disgust, Fear, Happiness, Sadness, Surprise, Neutral
+            nn.Linear(64, 7)
+        )
+
+        self.sentiment_classifier = nn.Sequential(
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            # 3 sentiment classes - Negative, Neutral, Positive
+            nn.Linear(64, 3)
+        )
+
+    def forward(self, text_inputs, video_frames, audio_features):
+
+        text_features = self.text_encoder(
+            text_inputs['input_ids'], text_inputs['attention_mask'])
+        video_features = self.video_encoder(video_frames)
+        audio_features = self.audio_encoder(audio_features)
+
+        # Concatenate features from all modalities
+        combined_features = torch.cat(
+            (text_features, video_features, audio_features), dim=1)
+        # Pass through the fusion layer
+        fused_features = self.fusion_layer(combined_features)
+        # Pass through the classification layers
+        emotion_output = self.emotion_classifier(fused_features)
+        sentiment_output = self.sentiment_classifier(fused_features)
+        return {
+            "emotions": emotion_output,
+            "sentiments": sentiment_output
+        }
