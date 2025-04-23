@@ -189,96 +189,96 @@ class MultimodalTrainer:
             label_smoothing=0.05
         )
 
-        def log_metrics(self, losses, metrics=None, phase="train"):
-            if phase == 'train':
-                self.current_train_losses = losses
-            else:  # Validation phase
-                self.writer.add_scalar(
-                    'loss/total/train', self.current_train_losses['total'], self.global_step
-                )
+    def log_metrics(self, losses, metrics=None, phase="train"):
+        if phase == 'train':
+            self.current_train_losses = losses
+        else:  # Validation phase
+            self.writer.add_scalar(
+                'loss/total/train', self.current_train_losses['total'], self.global_step
+            )
 
-                self.writer.add_scalar(
-                    'loss/total/val', self.losses['total'], self.global_step
-                )
-                # Emotions
-                self.writer.add_scalar(
-                    'loss/emotion/train', self.current_train_losses['emotion'], self.global_step
-                )
+            self.writer.add_scalar(
+                'loss/total/val', losses['total'], self.global_step
+            )
+            # Emotions
+            self.writer.add_scalar(
+                'loss/emotion/train', self.current_train_losses['emotion'], self.global_step
+            )
 
-                self.writer.add_scalar(
-                    'loss/emotion/val', self.losses['emotion'], self.global_step
-                )
+            self.writer.add_scalar(
+                'loss/emotion/val', losses['emotion'], self.global_step
+            )
 
-                # Sentiments
-                self.writer.add_scalar(
-                    'loss/sentiment/train', self.current_train_losses['sentiment'], self.global_step
-                )
+            # Sentiments
+            self.writer.add_scalar(
+                'loss/sentiment/train', self.current_train_losses['sentiment'], self.global_step
+            )
 
-                self.writer.add_scalar(
-                    'loss/sentiment/val', self.losses['sentiment'], self.global_step
-                )
+            self.writer.add_scalar(
+                'loss/sentiment/val', losses['sentiment'], self.global_step
+            )
 
-            if metrics:
-                self.writer.add_scalar(
-                    f'{phase}/emotion_precision', metrics['emotion_precision'], self.global_step)
-                self.writer.add_scalar(
-                    f'{phase}/emotion_accuracy', metrics['emotion_accuracy'], self.global_step)
-                self.writer.add_scalar(
-                    f'{phase}/sentiment_precision', metrics['sentiment_precision'], self.global_step)
-                self.writer.add_scalar(
-                    f'{phase}/sentiment_accuracy', metrics['sentiment_accuracy'], self.global_step)
+        if metrics:
+            self.writer.add_scalar(
+                f'{phase}/emotion_precision', metrics['emotion_precision'], self.global_step)
+            self.writer.add_scalar(
+                f'{phase}/emotion_accuracy', metrics['emotion_accuracy'], self.global_step)
+            self.writer.add_scalar(
+                f'{phase}/sentiment_precision', metrics['sentiment_precision'], self.global_step)
+            self.writer.add_scalar(
+                f'{phase}/sentiment_accuracy', metrics['sentiment_accuracy'], self.global_step)
 
-        def train_epoch(self):
-            self.model.train()
-            running_loss = {'total': 0, 'emotion': 0, 'sentiment': 0}
+    def train_epoch(self):
+        self.model.train()
+        running_loss = {'total': 0, 'emotion': 0, 'sentiment': 0}
 
-            for batch in self.train_loader:
-                device = next(self.model.parameters()).device
-                text_inputs = {
-                    'input_ids': batch['text_input']['input_ids'].to(device),
-                    'attention_mask': batch['text_input']['attention_mask'].to(device)
-                }
-                video_frames = batch['video_frames'].to(device)
-                audio_features = batch['audio_features'].to(device)
-                emotion_labels = batch['emotion_labels'].to(device)
-                sentiment_labels = batch['sentiment_labels'].to(device)
+        for batch in self.train_loader:
+            device = next(self.model.parameters()).device
+            text_inputs = {
+                'input_ids': batch['text_input']['input_ids'].to(device),
+                'attention_mask': batch['text_input']['attention_mask'].to(device)
+            }
+            video_frames = batch['video_frames'].to(device)
+            audio_features = batch['audio_features'].to(device)
+            emotion_labels = batch['emotion_labels'].to(device)
+            sentiment_labels = batch['sentiment_labels'].to(device)
 
-                # Zero the parameter gradients
-                self.optimizer.zero_grad()
+            # Zero the parameter gradients
+            self.optimizer.zero_grad()
 
-                # Forward pass
-                outputs = self.model(
-                    text_inputs, video_frames, audio_features)
-                # Compute the loss
-                emotion_loss = self.emotion_criterion(
-                    outputs['emotions'], emotion_labels)
-                sentiment_loss = self.sentiment_criterion(
-                    outputs['sentiments'], sentiment_labels)
-                total_loss = emotion_loss + sentiment_loss
+            # Forward pass
+            outputs = self.model(
+                text_inputs, video_frames, audio_features)
+            # Compute the loss
+            emotion_loss = self.emotion_criterion(
+                outputs['emotions'], emotion_labels)
+            sentiment_loss = self.sentiment_criterion(
+                outputs['sentiments'], sentiment_labels)
+            total_loss = emotion_loss + sentiment_loss
 
-                # Backward pass
-                total_loss.backward()
+            # Backward pass
+            total_loss.backward()
 
-                # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), max_norm=1.0)
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=1.0)
 
-                self.optimizer.step()
+            self.optimizer.step()
 
-                # Track losses
-                running_loss['total'] += total_loss.item()
-                running_loss['emotion'] += emotion_loss.item()
-                running_loss['sentiment'] += sentiment_loss.item()
+            # Track losses
+            running_loss['total'] += total_loss.item()
+            running_loss['emotion'] += emotion_loss.item()
+            running_loss['sentiment'] += sentiment_loss.item()
 
-                self.log_metrics({
-                    'total': total_loss.item(),
-                    'emotion': emotion_loss.item(),
-                    'sentiment': sentiment_loss.item()
-                })
+            self.log_metrics({
+                'total': total_loss.item(),
+                'emotion': emotion_loss.item(),
+                'sentiment': sentiment_loss.item()
+            })
 
-                self.global_step += 1
+            self.global_step += 1
 
-            return {K: v / len(self.train_loader) for K, v in running_loss.items()}
+        return {K: v / len(self.train_loader) for K, v in running_loss.items()}
 
     def evaluate(self, data_loader, phase="val"):
         self.model.eval()
