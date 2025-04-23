@@ -3,6 +3,10 @@ import torch.nn as nn
 from transformers import BertModel  # type: ignore
 from torchvision import models as vision_models  # type: ignore
 from torchvision.models.video import R3D_18_Weights  # type: ignore
+from sklearn.metrics import precision_score, accuracy_score  # type: ignore
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
+import os
 
 from meld_dataset import MELDDataset  # type: ignore
 
@@ -155,6 +159,12 @@ class MultimodalTrainer:
         print(f"Validation samples: {val_size:,}")
         print(f"Batches per epoch: {len(train_loader):,}")
 
+        timestamp = datetime.now().strftime("%b%d_%H-%M-%S")  # Dec17_14-23-45
+        base_dir = '/opt/ml/output/tensorboard' if 'SM_MODEL_DIR' in os.environ else 'runs'
+        log_dir = f"{base_dir}/run_{timestamp}"
+        self.writer = SummaryWriter(log_dir=log_dir)
+        self.global_step = 0
+
         # very high: 1, high: 0.1 - 0.01, medium: 1e-1, low: 1e-4, very low: 1e-5
         self.optimizer = torch.optim.Adam([
             {'params': model.text_encoder.parameters(), 'lr': 8e-6},
@@ -169,6 +179,8 @@ class MultimodalTrainer:
             self.optimizer, mode='min', factor=0.1, patience=2
         )
 
+        self.current_train_losses = None
+
         self.emotion_criterion = nn.CrossEntropyLoss(
             label_smoothing=0.05
         )
@@ -176,6 +188,45 @@ class MultimodalTrainer:
         self.sentiment_criterion = nn.CrossEntropyLoss(
             label_smoothing=0.05
         )
+
+        def log_metrics(self, losses, metrics=None, phase="train"):
+            if phase == 'train':
+                self.current_train_losses = losses
+            else:  # Validation phase
+                self.writer.add_scalar(
+                    'loss/total/train', self.current_train_losses['total'], self.global_step
+                )
+
+                self.writer.add_scalar(
+                    'loss/total/val', self.losses['total'], self.global_step
+                )
+                # Emotions
+                self.writer.add_scalar(
+                    'loss/emotion/train', self.current_train_losses['emotion'], self.global_step
+                )
+
+                self.writer.add_scalar(
+                    'loss/emotion/val', self.losses['emotion'], self.global_step
+                )
+
+                # Sentiments
+                self.writer.add_scalar(
+                    'loss/sentiment/train', self.current_train_losses['sentiment'], self.global_step
+                )
+
+                self.writer.add_scalar(
+                    'loss/sentiment/val', self.losses['sentiment'], self.global_step
+                )
+
+            if metrics:
+                self.writer.add_scalar(
+                    f'{phase}/emotion_precision', metrics['emotion_precision'], self.global_step)
+                self.writer.add_scalar(
+                    f'{phase}/emotion_accuracy', metrics['emotion_accuracy'], self.global_step)
+                self.writer.add_scalar(
+                    f'{phase}/sentiment_precision', metrics['sentiment_precision'], self.global_step)
+                self.writer.add_scalar(
+                    f'{phase}/sentiment_accuracy', metrics['sentiment_accuracy'], self.global_step)
 
         def train_epoch(self):
             self.model.train()
@@ -219,18 +270,26 @@ class MultimodalTrainer:
                 running_loss['emotion'] += emotion_loss.item()
                 running_loss['sentiment'] += sentiment_loss.item()
 
+                self.log_metrics({
+                    'total': total_loss.item(),
+                    'emotion': emotion_loss.item(),
+                    'sentiment': sentiment_loss.item()
+                })
+
+                self.global_step += 1
+
             return {K: v / len(self.train_loader) for K, v in running_loss.items()}
 
-    def validate(self):
+    def evaluate(self, data_loader, phase="val"):
         self.model.eval()
-        val_loss = {'total': 0, 'emotion': 0, 'sentiment': 0}
+        losses = {'total': 0, 'emotion': 0, 'sentiment': 0}
         all_emotion_preds = []
         all_emotion_labels = []
         all_sentiment_preds = []
         all_sentiment_labels = []
 
         with torch.inference_mode():
-            for batch in self.val_loader:
+            for batch in data_loader:
                 device = next(self.model.parameters()).device
                 text_inputs = {
                     'input_ids': batch['text_input']['input_ids'].to(device),
@@ -262,9 +321,39 @@ class MultimodalTrainer:
                     sentiment_labels.cpu().numpy())
 
                 # Track losses
-                val_loss['total'] += total_loss.item()
-                val_loss['emotion'] += emotion_loss.item()
-                val_loss['sentiment'] += sentiment_loss.item()
+                losses['total'] += total_loss.item()
+                losses['emotion'] += emotion_loss.item()
+                losses['sentiment'] += sentiment_loss.item()
+
+        # Calculate average losses
+        avg_loss = {K: v / len(data_loader) for K, v in losses.items()}
+
+        # compute the precision and accuracy
+        emotion_precision = precision_score(
+            all_emotion_labels, all_emotion_preds, average='weighted')
+        emotion_accuracy = accuracy_score(
+            all_emotion_labels, all_emotion_preds)
+        sentiment_precision = precision_score(
+            all_sentiment_labels, all_sentiment_preds, average='weighted')
+        sentiment_accuracy = accuracy_score(
+            all_sentiment_labels, all_sentiment_preds)
+
+        self.log_metrics(avg_loss, {
+            'emotion_precision': emotion_precision,
+            'emotion_accuracy': emotion_accuracy,
+            'sentiment_precision': sentiment_precision,
+            'sentiment_accuracy': sentiment_accuracy
+        }, phase=phase)
+
+        if phase == "val":
+            self.scheduler.step(avg_loss['total'])
+
+        return avg_loss, {
+            'emotion_precision': emotion_precision,
+            'emotion_accuracy': emotion_accuracy,
+            'sentiment_precision': sentiment_precision,
+            'sentiment_accuracy': sentiment_accuracy
+        }
 
 
 if __name__ == "__main__":
