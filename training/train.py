@@ -1,3 +1,4 @@
+# type: ignore
 import os
 import argparse
 import torchaudio  # pyright: ignore # type: ignore

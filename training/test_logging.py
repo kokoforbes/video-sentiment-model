@@ -1,3 +1,4 @@
+# type: ignore
 from collections import namedtuple
 import torch
 from torch.utils.data import DataLoader
